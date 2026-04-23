@@ -1,0 +1,330 @@
+{
+  "name": "ICEGROUP WhatsApp Agent - Max",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-wh-post",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 400],
+      "webhookId": "icegroup-wa-post"
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "webhook/whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-wh-get",
+      "name": "Webhook GET Verificacion",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 160],
+      "webhookId": "icegroup-wa-get"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const query = $input.first().json.query || {};\nconst verifyToken = $env.META_VERIFY_TOKEN;\n\nif (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === verifyToken) {\n  return [{ json: { challenge: query['hub.challenge'], status: 200 } }];\n}\n\nreturn [{ json: { challenge: 'FORBIDDEN', status: 403 } }];"
+      },
+      "id": "node-code-verify",
+      "name": "Code Verificacion Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 160]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.challenge }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "id": "node-resp-verify",
+      "name": "Respond Verificacion",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [600, 160]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body;\nconst entry = body?.entry?.[0];\nconst changes = entry?.changes?.[0];\nconst value = changes?.value;\nconst message = value?.messages?.[0];\nconst hasStatuses = !!(value?.statuses);\n\nconst valid = !!message && message.type === 'text' && !hasStatuses;\n\nreturn [{ json: { valid, body } }];"
+      },
+      "id": "node-code-validar",
+      "name": "Code Validar Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-valid-msg",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-valid",
+      "name": "IF Mensaje Valido",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [600, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"ok\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-resp-invalid",
+      "name": "Respond OK Invalido",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [820, 560]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body;\nconst value = body.entry[0].changes[0].value;\nconst message = value.messages[0];\nconst contact = value.contacts?.[0];\n\nreturn [{\n  json: {\n    telefono: message.from,\n    mensaje: message.text.body,\n    nombre_wa: contact?.profile?.name || null,\n    message_id: message.id,\n    timestamp: message.timestamp\n  }\n}];"
+      },
+      "id": "node-code-extraer",
+      "name": "Code Extraer Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [820, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { telefono, nombre_wa } = $input.first().json;\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_SERVICE_KEY;\n\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`,\n  'Content-Type': 'application/json',\n  'Prefer': 'return=representation'\n};\n\n// Buscar lead existente\nconst searchRes = await fetch(\n  `${supabaseUrl}/rest/v1/leads?telefono=eq.${encodeURIComponent(telefono)}&select=*&limit=1`,\n  { headers }\n);\nconst existingLeads = await searchRes.json();\n\nlet lead;\nif (existingLeads.length > 0) {\n  lead = existingLeads[0];\n} else {\n  // Crear nuevo lead\n  const createRes = await fetch(`${supabaseUrl}/rest/v1/leads`, {\n    method: 'POST',\n    headers,\n    body: JSON.stringify({\n      telefono,\n      nombre: nombre_wa,\n      estado: 'nuevo'\n    })\n  });\n  const created = await createRes.json();\n  lead = created[0];\n}\n\nconst msgData = $('Code Extraer Datos').first().json;\n\nreturn [{\n  json: {\n    lead_id: lead.id,\n    lead_nombre: lead.nombre || nombre_wa || null,\n    lead_estado: lead.estado || 'nuevo',\n    telefono: msgData.telefono,\n    mensaje: msgData.mensaje,\n    nombre_wa: msgData.nombre_wa,\n    message_id: msgData.message_id\n  }\n}];"
+      },
+      "id": "node-code-lead",
+      "name": "Code Gestionar Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json;\nconst { lead_id, lead_nombre, lead_estado, telefono, mensaje, nombre_wa, message_id } = input;\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_SERVICE_KEY;\n\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`\n};\n\nconst histRes = await fetch(\n  `${supabaseUrl}/rest/v1/conversaciones?lead_id=eq.${lead_id}&order=created_at.asc&limit=20&select=rol,mensaje`,\n  { headers }\n);\nconst historial = await histRes.json();\n\nreturn [{\n  json: {\n    lead_id,\n    lead_nombre,\n    lead_estado,\n    telefono,\n    mensaje,\n    nombre_wa,\n    message_id,\n    historial: Array.isArray(historial) ? historial : []\n  }\n}];"
+      },
+      "id": "node-code-historial",
+      "name": "Code Obtener Historial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1260, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const {\n  lead_id, lead_nombre, lead_estado, telefono,\n  mensaje, nombre_wa, historial, message_id\n} = $input.first().json;\n\nconst nombreCliente = lead_nombre || nombre_wa || 'amigo';\n\nconst systemPrompt = `Eres Max, el asesor comercial digital de ICEGROUP Colombia, empresa especializada en máquinas granizadoras e insumos para granizados y bebidas congeladas para negocios B2B.\nTu metodología es neuroventas basada en Jürgen Klarić. Activas botones reptiles, eliminas miedos y cierras ventas en el momento de mayor emoción del cliente.\n\nPERSONALIDAD\n- Hablas siempre de TÚ, nunca de USTED\n- Usas el nombre del cliente constantemente\n- Eres cálido, ágil, seguro y vendedor sin ser invasivo\n- Máximo 3-4 líneas por mensaje\n- Nunca bloques largos de texto\n- Emojis con moderación\n\nPRODUCTOS Y PRECIOS (NUNCA IMPROVISES)\n- Máquina granizadora: $5.600.000 + 2 bolsas de insumo gratis de 9 litros\n- Insumos CON licor: $50.000 por bolsa de 9 litros\n- Insumos SIN licor: $40.000 por bolsa de 9 litros\n- Sabores: los confirma el equipo de logística al momento del pago\n- NUNCA inventes precios, condiciones, fechas de entrega ni sabores\n\nDATOS DE PAGO (EXACTOS)\n- Banco: Bancolombia Ahorros\n- Número: 50378474733\n- Titular: ICEGROUP COLOMBIA\n- Link logística: https://wa.me/message/YA7Y2IV7VEVSD1\n\nFLUJO DE VENTA\n\nAPERTURA — PATADA VOLADORA\nNUNCA empieces con ¿En qué te puedo ayudar?\nAbre con un postulado fuerte según el tipo de negocio detectado:\nPara bares/restaurantes: ¡Hola [nombre]! 🧊 ¿Sabías que los negocios que no innovan su oferta de bebidas están perdiendo hasta un 30% de sus clientes frente a la competencia? Te cuento cómo ICEGROUP está cambiando eso.\nPara emprendedores: ¡Hola [nombre]! Te voy a mostrar cómo convertir 1 metro cuadrado de tu negocio en la zona más rentable de tu local. 🔥\nPara hoteles/eventos: ¡Hola [nombre]! Los negocios que dominan las experiencias hoy tienen algo en común: una línea de bebidas que se vende sola. Te explico cómo.\n\nCALIFICACIÓN (una pregunta a la vez)\n1. Nombre del cliente\n2. Ciudad\n3. Tipo y nombre del negocio\n4. Qué busca: máquina, insumos o ambos\n5. Si ya tiene negocio funcionando o está emprendiendo\n\nBOTONES REPTILES\nSupervivencia: Los negocios sin línea de bebidas diferenciada están perdiendo clientes sin darse cuenta.\nAhorro de energía: Tu personal solo presiona un botón y el cliente tiene su bebida en 5 segundos. Cero estrés operativo.\nPlacer y estatus: Tus clientes no compran un granizado. Compran un momento que van a querer fotografiar y compartir.\nControl: Tienes el control exacto de cada gramo de insumo. Se acabó el desperdicio y el robo hormiga.\n\nCUARTADA RACIONAL\n[Nombre], miremos los números:\\n📍 Máquina: $5.600.000\\n📍 15 granizados/día a $8.000 = $120.000 diarios\\n📍 En menos de 2 meses la máquina se pagó sola 💰\n\nOBJECIONES\n- Está muy costoso: Entiendo [nombre]. Pero no estás comprando una máquina, estás comprando una fuente de ingresos diarios. ¿Miramos cuánto podrías generar el primer mes?\n- Quiero pensarlo: Claro [nombre]. ¿Qué es lo que más te genera duda? Lo resolvemos ahora.\n- Solo estoy averiguando: Perfecto, para eso estoy. Y mientras averiguas, déjame mostrarte algo que no esperabas 👇 [continúa con cuartada racional]\n- Ya tengo proveedor: ¿Tu proveedor te da insumos + soporte técnico + acompañamiento comercial? Eso es exactamente lo que nos diferencia.\n- Solo quiero precios: Te los doy ahora. Y te cuento qué incluye cada cosa para que compares bien 👇\n\nCIERRE\nCuando el cliente confirme que quiere comprar:\nPerfecto [nombre] 🎉 Para confirmar tu pedido:\\n💳 Bancolombia Ahorros\\n🔢 50378474733\\n👤 ICEGROUP COLOMBIA\\nUna vez pagues, envía tu comprobante + dirección de entrega aquí 👉 https://wa.me/message/YA7Y2IV7VEVSD1\\nEllos te confirman el tiempo de entrega y los sabores de tus bolsas de regalo 🧊\\n¡Bienvenido a la familia ICEGROUP!\n\nMENSAJES NO TEXTO\nAudio: ¡Hola! Por ahora me comunico mejor por texto 😊 ¿Me cuentas qué necesitas?\nImagen sin contexto: Interesante 👀 ¿Qué tienes en mente con esto?\n\nLO QUE NUNCA DEBES HACER\n- Decir USTED\n- Inventar precios, sabores o fechas de entrega\n- Gestionar envíos (eso es logística)\n- Enviar bloques largos de texto de golpe\n- Empezar con ¿En qué te puedo ayudar?\n- Confirmar sabores (los confirma logística)\n- Dejar ir un lead sin calificarlo\n\nNOMBRE DEL CLIENTE ACTUAL: ${nombreCliente}`;\n\nconst messages = historial.map(msg => ({\n  role: msg.rol,\n  content: msg.mensaje\n}));\n\nmessages.push({ role: 'user', content: mensaje });\n\nconst claudeBody = JSON.stringify({\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 500,\n  system: systemPrompt,\n  messages\n});\n\nreturn [{\n  json: {\n    claudeBody,\n    lead_id,\n    lead_nombre,\n    lead_estado,\n    telefono,\n    mensaje_usuario: mensaje,\n    message_id\n  }\n}];"
+      },
+      "id": "node-code-prompt",
+      "name": "Code Construir Prompt Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.claudeBody }}",
+        "options": {}
+      },
+      "id": "node-http-claude",
+      "name": "HTTP Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1700, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const claudeResponse = $input.first().json;\nconst prev = $('Code Construir Prompt Claude').first().json;\n\nconst respuesta = claudeResponse.content?.[0]?.text ||\n  'En este momento estamos atendiendo tu mensaje 🧊 En un momento te respondemos. ¡Gracias por tu paciencia!';\n\nlet nuevo_estado = null;\nconst r = respuesta.toLowerCase();\n\nif (r.includes('50378474733') || r.includes('bienvenido a la familia')) {\n  nuevo_estado = 'cerrado';\n} else if (r.includes('cuál es tu') || r.includes('en qué ciudad') || r.includes('cuéntame') || r.includes('cómo se llama') || r.includes('qué tipo de negocio')) {\n  nuevo_estado = 'en_conversacion';\n} else if (r.includes('miremos los números') || r.includes('granizados/día') || r.includes('se pagó sola')) {\n  nuevo_estado = 'calificado';\n}\n\nreturn [{\n  json: {\n    respuesta,\n    nuevo_estado,\n    lead_id: prev.lead_id,\n    lead_estado: prev.lead_estado,\n    telefono: prev.telefono,\n    mensaje_usuario: prev.mensaje_usuario,\n    message_id: prev.message_id\n  }\n}];"
+      },
+      "id": "node-code-response",
+      "name": "Code Procesar Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const {\n  respuesta, nuevo_estado, lead_id, lead_estado,\n  telefono, mensaje_usuario, message_id\n} = $input.first().json;\n\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_SERVICE_KEY;\n\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`,\n  'Content-Type': 'application/json',\n  'Prefer': 'return=representation'\n};\n\n// Guardar mensaje del usuario\nawait fetch(`${supabaseUrl}/rest/v1/conversaciones`, {\n  method: 'POST',\n  headers,\n  body: JSON.stringify({ lead_id, rol: 'user', mensaje: mensaje_usuario })\n});\n\n// Guardar respuesta del agente\nawait fetch(`${supabaseUrl}/rest/v1/conversaciones`, {\n  method: 'POST',\n  headers,\n  body: JSON.stringify({ lead_id, rol: 'assistant', mensaje: respuesta })\n});\n\n// Actualizar estado del lead si cambió\nif (nuevo_estado && nuevo_estado !== lead_estado) {\n  await fetch(\n    `${supabaseUrl}/rest/v1/leads?id=eq.${lead_id}`,\n    {\n      method: 'PATCH',\n      headers: { ...headers, 'Prefer': 'return=minimal' },\n      body: JSON.stringify({ estado: nuevo_estado, updated_at: new Date().toISOString() })\n    }\n  );\n}\n\n// Preparar body para WhatsApp\nconst waBody = JSON.stringify({\n  messaging_product: 'whatsapp',\n  recipient_type: 'individual',\n  to: telefono,\n  type: 'text',\n  text: {\n    preview_url: false,\n    body: respuesta\n  }\n});\n\nreturn [{ json: { waBody, telefono, respuesta } }];"
+      },
+      "id": "node-code-save",
+      "name": "Code Guardar Conversacion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2140, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.waBody }}",
+        "options": {}
+      },
+      "id": "node-http-wa",
+      "name": "HTTP Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2360, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"ok\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-resp-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2580, 400]
+    }
+  ],
+  "connections": {
+    "Webhook POST": {
+      "main": [
+        [{ "node": "Code Validar Mensaje", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook GET Verificacion": {
+      "main": [
+        [{ "node": "Code Verificacion Meta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Verificacion Meta": {
+      "main": [
+        [{ "node": "Respond Verificacion", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Validar Mensaje": {
+      "main": [
+        [{ "node": "IF Mensaje Valido", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF Mensaje Valido": {
+      "main": [
+        [{ "node": "Code Extraer Datos", "type": "main", "index": 0 }],
+        [{ "node": "Respond OK Invalido", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Extraer Datos": {
+      "main": [
+        [{ "node": "Code Gestionar Lead", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Gestionar Lead": {
+      "main": [
+        [{ "node": "Code Obtener Historial", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Obtener Historial": {
+      "main": [
+        [{ "node": "Code Construir Prompt Claude", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Construir Prompt Claude": {
+      "main": [
+        [{ "node": "HTTP Claude API", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP Claude API": {
+      "main": [
+        [{ "node": "Code Procesar Respuesta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Procesar Respuesta": {
+      "main": [
+        [{ "node": "Code Guardar Conversacion", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code Guardar Conversacion": {
+      "main": [
+        [{ "node": "HTTP Enviar WhatsApp", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP Enviar WhatsApp": {
+      "main": [
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "meta": {
+    "templateId": "icegroup-whatsapp-agent",
+    "instanceId": "icegroup"
+  }
+}

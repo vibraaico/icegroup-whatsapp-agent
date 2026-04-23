@@ -1,0 +1,15 @@
+# Credenciales — nunca subir al repo
+.env
+*.log
+ngrok.log
+lt.log
+
+# Node
+node_modules/
+
+# N8N data local
+.n8n/
+
+# OS
+.DS_Store
+Thumbs.db
